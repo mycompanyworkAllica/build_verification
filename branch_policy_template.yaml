@@ -1,0 +1,94 @@
+jobs:
+  - job: "branchpolicy"
+    displayName: "Branch Policy Checks"
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+      - checkout: self
+        clean: true
+        persistCredentials: true
+
+      - bash: |
+          pwd
+          if $( find . -name '* *' | grep . ) ; then
+            echo "No spaces in filenames or paths please, it often breaks sub optimal scripts"
+            exit 99
+          fi
+        displayName: 'Rogue naming checks'
+
+      - bash: |
+          if [ -d Terraform ] ; then
+            cd Terraform
+            _cwd=$PWD
+            for d in * ; do
+              if compgen -G "$d/*.tf" >/dev/null ; then
+                cd $d
+                if ( which docker > /dev/null ) ; then
+                  echo "Linting: $PWD"
+                  docker run \
+                    --rm \
+                    -v $(pwd)/../:/data \
+                    -t \
+                    ghcr.io/terraform-linters/tflint $(basename $PWD) --disable-rule=terraform_required_providers --disable-rule=terraform_unused_declarations -f compact || true
+                fi
+                cd ${_cwd}
+              fi
+            done
+          fi
+        displayName: 'Lint Terraform'
+        condition: succeededOrFailed()
+
+      - bash: |
+          for i in $(find . -type f \( -iname \*.tf -o -iname \*.tfvars -o -iname \*.yaml -o -iname \*.yml \))
+          do
+              sed '/./,/^$/!d' -i $i
+          done
+        displayName: 'Cleanup Codebase'
+
+      - bash: |
+          for i in $(find . -type f \( -iname \*.tf -o -iname \*.tfvars \))
+          do
+              terraform fmt $i
+          done
+        displayName: 'Terraform Format'
+
+      - bash: |
+          branch="$(System.PullRequest.SourceBranch)"
+          conventions=("PET-" "TSD-" "CLLPT-" "ASEC-")
+          valid_convention=0
+
+          for convention in "${conventions[@]}"
+          do
+            if [[ "$branch" == *"$convention"* ]]
+            then
+            valid_convention=1
+            break
+            fi
+          done
+
+          if [ "$valid_convention" -eq 0 ]
+          then
+            echo "$branch - Branch name does not conform with our standards. Please update your branch name to link with your PET/TSD/CLLPT/ASEC ticket, e.g., PET-1234/TSD-1234/CLLPT-1234"
+            exit 1
+          fi
+
+          echo "$branch - Branch name conforms with our standards"
+        displayName: 'Check Branch Name'
+
+      - bash: |
+          git config --global user.email "PlatformEngineering@allica.bank"
+          git config --global user.name "Platform Engineering"
+          git add .
+          set +e
+          # Check for changes
+          if git status | grep -q modified
+          then
+            set -e
+            commit_message=$(git log -1 --pretty=%B)
+            git commit -m "${commit_message}"
+            git push --set-upstream origin HEAD:$(System.PullRequest.SourceBranch) --force
+          else
+            set -e
+            echo "No changes."
+          fi
+        displayName: 'Git Commit'

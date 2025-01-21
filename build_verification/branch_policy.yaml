@@ -1,0 +1,14 @@
+trigger: none
+
+resources:
+  repositories:
+    - repository: template
+      type: git
+      name: Allica-Infra/pipelines
+      ref: master
+
+stages:
+  - stage: format_Codebase
+    displayName: "Format Codebase"
+    jobs:
+      - template: build_verification/branch_policy_template.yaml@template
